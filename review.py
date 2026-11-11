@@ -160,16 +160,28 @@ function pixels(){if(px)return px;const c=document.createElement('canvas');c.wid
 function shapePath(ctx,a,W,H,grow){const cx=(a.box[0]+a.box[2]/2)*W,cy=(a.box[1]+a.box[3]/2)*H,w=a.box[2]*W*grow,h=a.box[3]*H*grow;
   ctx.save();ctx.translate(cx,cy);ctx.rotate(a.angle*Math.PI/180);ctx.beginPath();
   if(a.shape==='rect'){ctx.rect(-w/2,-h/2,w,h)}else{ctx.ellipse(0,0,w/2,h/2,0,0,2*Math.PI)}ctx.restore()}
-function average(a,inside){const P=pixels(),m=document.createElement('canvas');m.width=P.w;m.height=P.h;const x=m.getContext('2d');
-  x.fillStyle='#fff';shapePath(x,a,P.w,P.h,inside?1:1.45);x.fill();if(!inside){x.globalCompositeOperation='destination-out';shapePath(x,a,P.w,P.h,1.05);x.fill()}
+function sample(a,mode){ // average colour: 'in' = inside the shape (rectangles), 'top'/'bottom' = the ring just outside an oval
+  const P=pixels(),m=document.createElement('canvas');m.width=P.w;m.height=P.h;const x=m.getContext('2d');x.fillStyle='#fff';
+  if(mode==='in'){shapePath(x,a,P.w,P.h,1);x.fill()}
+  else{shapePath(x,a,P.w,P.h,1.5);x.fill();x.globalCompositeOperation='destination-out';shapePath(x,a,P.w,P.h,1.04);x.fill();
+    // keep only the upper or lower half of the ring, in the area's own (rotated) frame
+    const cx=(a.box[0]+a.box[2]/2)*P.w,cy=(a.box[1]+a.box[3]/2)*P.h;x.save();x.translate(cx,cy);x.rotate(a.angle*Math.PI/180);
+    x.fillRect(-P.w*2,mode==='top'?0:-P.h*2,P.w*4,P.h*2);x.restore()}
   const M=x.getImageData(0,0,P.w,P.h).data;let r=0,g=0,b=0,n=0;
   for(let i=0;i<M.length;i+=16){if(M[i+3]>200){r+=P.d[i];g+=P.d[i+1];b+=P.d[i+2];n++}}
-  return n?[r/n,g/n,b/n]:[128,128,128]}
+  return n?[r/n,g/n,b/n]:null}
 function drawApprox(){const P=pixels();cv.width=P.w;cv.height=P.h;const x=cv.getContext('2d');x.clearRect(0,0,P.w,P.h);
-  const todo=D.areas.filter(a=>a.on&&false).concat(manual);
-  todo.forEach(a=>{const c=average(a,a.shape==='rect');x.save();
-    if(a.shape!=='rect')x.filter='blur('+Math.max(2,Math.round(Math.min(a.box[2]*P.w,a.box[3]*P.h)*0.06))+'px)';
-    x.fillStyle='rgb('+c.map(Math.round).join(',')+')';shapePath(x,a,P.w,P.h,1);x.fill();x.restore()})}
+  manual.forEach(a=>{const W=P.w,H=P.h,cx=(a.box[0]+a.box[2]/2)*W,cy=(a.box[1]+a.box[3]/2)*H,w=a.box[2]*W,h=a.box[3]*H;
+    const rgb=c=>'rgb('+c.map(Math.round).join(',')+')';
+    if(a.shape==='rect'){const c=sample(a,'in')||[128,128,128];x.fillStyle=rgb(c);shapePath(x,a,W,H,1);x.fill();return}
+    // ovals: a soft gradient from the colours around the top to those around the bottom, feathered outward
+    const top=sample(a,'top')||[128,128,128],bot=sample(a,'bottom')||top,soft=Math.max(3,Math.min(w,h)*0.16);
+    const L=document.createElement('canvas');L.width=W;L.height=H;const y=L.getContext('2d');
+    y.save();y.translate(cx,cy);y.rotate(a.angle*Math.PI/180);
+    const gr=y.createLinearGradient(0,-h/2,0,h/2);gr.addColorStop(0,rgb(top));gr.addColorStop(1,rgb(bot));y.fillStyle=gr;
+    y.beginPath();y.ellipse(0,0,w/2+soft*0.6,h/2+soft*0.6,0,0,2*Math.PI);y.fill();y.restore();
+    x.save();x.filter='blur('+Math.round(soft)+'px)';x.drawImage(L,0,0);x.restore();      // soft outer edge
+    x.save();shapePath(x,a,W,H,1);x.clip();x.filter='blur('+Math.round(soft*0.5)+'px)';x.drawImage(L,0,0);x.restore()})}  // solid inside
 document.getElementById('bBefore').onclick=()=>{stage.classList.remove('after');bBefore.classList.add('sel');bAfter.classList.remove('sel')};
 document.getElementById('bAfter').onclick=()=>{stage.classList.add('after');bAfter.classList.add('sel');bBefore.classList.remove('sel');drawApprox()};
 document.getElementById('bUndo').onclick=()=>{manual.pop();render()};
