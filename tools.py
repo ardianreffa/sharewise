@@ -93,13 +93,30 @@ def load_upright(path: Path) -> Image.Image:
     ext = path.suffix.lower()
     if ext in (".heic", ".heif", ".hif"):
         import pillow_heif
-        h = pillow_heif.open_heif(str(path), convert_hdr_to_8bit=True); im = h.to_pillow()
-        if h.info.get("exif"):
-            ex = Image.Exif(); raw = h.info["exif"]; ex.load(raw[6:] if raw[:6] == b"Exif\x00\x00" else raw)
-            if ex.get(274): im.getexif()[274] = ex.get(274)
+        # pillow-heif already applies the HEIF rotation when decoding and marks the image upright; the raw EXIF
+        # orientation must NOT be applied a second time (that turned portrait photos sideways)
+        im = pillow_heif.open_heif(str(path), convert_hdr_to_8bit=True).to_pillow()
         return ImageOps.exif_transpose(im).convert("RGB")
     with Image.open(path) as im:
         return ImageOps.exif_transpose(im).convert("RGB")
+
+
+def _grid(im: Image.Image) -> Image.Image:
+    """A copy with thin labelled lines every 10%, so a vision model can name positions (0..1, top-left origin)."""
+    from PIL import ImageDraw, ImageFont
+    g = im.convert("RGB").copy(); d = ImageDraw.Draw(g); W, H = g.size
+    try:
+        font = ImageFont.load_default(size=max(12, W // 70))
+    except TypeError:
+        font = ImageFont.load_default()
+    for i in range(1, 10):
+        x, y = int(W * i / 10), int(H * i / 10)
+        d.line((x, 0, x, H), fill=(255, 220, 0), width=1); d.line((0, y, W, y), fill=(255, 220, 0), width=1)
+        for (tx, ty) in ((x + 3, 2), (x + 3, H - 18)):
+            d.text((tx, ty), f"{i / 10:.1f}", fill=(255, 220, 0), font=font, stroke_width=2, stroke_fill=(0, 0, 0))
+        for (tx, ty) in ((3, y + 2), (W - 34, y + 2)):
+            d.text((tx, ty), f"{i / 10:.1f}", fill=(255, 220, 0), font=font, stroke_width=2, stroke_fill=(0, 0, 0))
+    return g
 
 
 class Sharewise:
@@ -380,13 +397,17 @@ class Sharewise:
             if not Path(p).exists() or Path(p).suffix.lower() in video.VIDEO_EXT: continue
             with Image.open(p) as im:
                 small = im.convert("RGB"); small.thumbnail((1280, 1280))
-            q = d / f"{int(n):03d}.jpg"; small.save(q, "JPEG", quality=85)        # no metadata at all
-            files.append({"photo": int(n), "image": str(q)})
+            q = d / f"{int(n):03d}.jpg"; small.save(q, "JPEG", quality=85)        # no metadata at all (for the user)
+            g = d / f"{int(n):03d}-grid.jpg"; _grid(small).save(g, "JPEG", quality=85)   # same picture with a 0..1 grid (for you)
+            files.append({"photo": int(n), "image": str(g), "clean_copy_preview": str(q)})
         return _ok({"images": files[:12],
-                    "how": ("Only if the user asked for a visual check: look at each image with your vision tool for anything that "
-                            "still identifies a person or a place (a face, a house number, a street sign, a plate, a name badge, "
-                            "a screen). These are the finished copies, already hidden and clean. If you find something, tell the "
-                            "user and, if they agree, call sharewise_share again with add_areas for that photo."),
+                    "how": ("Use your vision tool on 'image' (the finished copy with a grid; lines every 0.1, labelled at the "
+                            "edges, origin top-left). Either the user asked you to hide something specific (e.g. 'the woman in the "
+                            "hat on the left'), or they asked for a visual check for anything still identifying (a face, a house "
+                            "number, a street sign, a plate, a name badge, a screen). Read the area's position off the grid as "
+                            "[x, y, width, height] in 0..1, a little generous around a face, and call sharewise_share again with "
+                            "add_areas for that photo. Then tell the user which area you added and that they can fine-tune it on "
+                            "the review page (drag to move, corner to resize). Never claim certainty about a position."),
                     "privacy": "These images are sent to your model provider when you look at them."})
 
     # ── slash command: literal, no model ─────────────────────────────────

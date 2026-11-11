@@ -63,6 +63,8 @@ button.sel{border-color:var(--ink);font-weight:600}
 .box.text,.box.plate{border-radius:8px}.box.manual{border-radius:50%;border-color:var(--add);background:rgba(111,191,150,.14)}
 .box.off{border-style:dashed;border-color:var(--off);background:transparent}
 .tag{position:absolute;left:0;top:-24px;font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 6px;white-space:nowrap;color:var(--ink)}
+.handle{position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;border-radius:3px;background:var(--panel);border:2px solid currentColor;cursor:nwse-resize}
+.box{color:var(--on)}.box.manual{color:var(--add)}.box.off .handle{display:none}
 .drawing{position:absolute;border:2px dashed var(--add);border-radius:50%;pointer-events:none}
 .after .box,.after .tag{display:none}
 .stage img.patch{position:absolute;pointer-events:none;display:none;max-width:none;border-radius:0}.stage.after img.patch.on{display:block}
@@ -76,7 +78,7 @@ button.sel{border-color:var(--ink);font-weight:600}
 .note{font-size:14px;color:var(--soft)}
 </style></head><body><main>
 <h1>Sharewise review: __NAME__</h1>
-<p class="lede">Nothing has been changed. <b>Click</b> an area to switch it off or on (for example your own face in a selfie). <b>Drag</b> on the photo to add an area the detector missed. Then copy the code below and paste it to Hermes. Hidden areas are rebuilt from their surroundings: nothing of what was there is kept.</p>
+<p class="lede">Nothing has been changed. <b>Click</b> an area to switch it off or on (for example your own face in a selfie). <b>Drag an area</b> to move it, or <b>drag its corner</b> to resize it. <b>Drag on the photo</b> to add an area the detector missed. Then copy the code below and paste it to Hermes. Hidden areas are rebuilt from their surroundings: nothing of what was there is kept.</p>
 <div class="bar"><button id="bBefore" class="sel">Before: areas to hide</button><button id="bAfter">After: preview</button><button id="bUndo">Remove my last area</button></div>
 <div class="stage" id="stage"><img id="img" src="__BEFORE__" width="__W__" height="__H__" alt="photo" draggable="false"></div>
 <div class="legend"><span><i></i>will be hidden</span><span><i class="off"></i>switched off (stays visible)</span><span><i class="add"></i>your own area</span></div>
@@ -99,8 +101,9 @@ function render(){
     const b=document.createElement('div');b.className='box '+a.kind+(a.on?'':' off');
     b.style.left=pct(a.box[0]);b.style.top=pct(a.box[1]);b.style.width=pct(a.box[2]);b.style.height=pct(a.box[3]);
     const t=document.createElement('span');t.className='tag';t.textContent=a.label+(a.on?'':' (off)');b.appendChild(t);
-    b.addEventListener('pointerdown',e=>{e.stopPropagation()});
-    b.addEventListener('click',e=>{e.stopPropagation();if(a.kind==='manual'){manual=manual.filter(m=>m!==a)}else{a.on=!a.on}render()});
+    const hd=document.createElement('span');hd.className='handle';b.appendChild(hd);
+    b.addEventListener('pointerdown',e=>{e.stopPropagation();e.preventDefault();
+      drag={a:a,mode:(e.target===hd?'resize':'move'),x:e.clientX,y:e.clientY,box:a.box.slice(),moved:false};stage.setPointerCapture(e.pointerId)});
     stage.appendChild(b)});
   const ids=D.areas.filter(a=>a.on).map(a=>a.id).join(',');
   const mb=manual.map(m=>m.box.map(v=>Math.round(v*1000).toString().padStart(3,'0')).join('')).join('-');
@@ -110,12 +113,24 @@ function render(){
   const off=D.areas.filter(a=>!a.on).length;
   document.getElementById('sum').textContent=(D.areas.filter(a=>a.on).length+manual.length)+' areas will be hidden, '+off+' switched off, '+manual.length+' added by you.';
 }
-let start=null,ghost=null;
-stage.addEventListener('pointerdown',e=>{if(stage.classList.contains('after'))return;const r=img.getBoundingClientRect();start={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+let start=null,ghost=null,drag=null;
+function own(a){ // moving or resizing a detected area turns it into the user's own area at the new place
+  if(a.kind==='manual')return a;
+  a.on=false;const m={box:a.box.slice(),kind:'manual',on:true,label:'Your area'};manual.push(m);return m}
+stage.addEventListener('pointermove',e=>{if(!drag)return;const r=img.getBoundingClientRect();
+  const dx=(e.clientX-drag.x)/r.width,dy=(e.clientY-drag.y)/r.height;
+  if(!drag.moved){if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)<5)return;drag.moved=true;drag.a=own(drag.a)}
+  const b=drag.box;
+  if(drag.mode==='move'){drag.a.box=[Math.min(Math.max(b[0]+dx,0),1-b[2]),Math.min(Math.max(b[1]+dy,0),1-b[3]),b[2],b[3]]}
+  else{drag.a.box=[b[0],b[1],Math.min(Math.max(b[2]+dx,0.01),1-b[0]),Math.min(Math.max(b[3]+dy,0.01),1-b[1])]}
+  render()});
+stage.addEventListener('pointerup',e=>{if(!drag)return;const d=drag;drag=null;
+  if(!d.moved){if(d.a.kind==='manual'){manual=manual.filter(m=>m!==d.a)}else{d.a.on=!d.a.on}}render()});
+stage.addEventListener('pointerdown',e=>{if(stage.classList.contains('after')||drag)return;const r=img.getBoundingClientRect();start={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
   ghost=document.createElement('div');ghost.className='drawing';stage.appendChild(ghost);stage.setPointerCapture(e.pointerId)});
-stage.addEventListener('pointermove',e=>{if(!start)return;const r=img.getBoundingClientRect();const x=Math.min(Math.max((e.clientX-r.left)/r.width,0),1),y=Math.min(Math.max((e.clientY-r.top)/r.height,0),1);
+stage.addEventListener('pointermove',e=>{if(!start||drag)return;const r=img.getBoundingClientRect();const x=Math.min(Math.max((e.clientX-r.left)/r.width,0),1),y=Math.min(Math.max((e.clientY-r.top)/r.height,0),1);
   ghost.style.left=pct(Math.min(x,start.x));ghost.style.top=pct(Math.min(y,start.y));ghost.style.width=pct(Math.abs(x-start.x));ghost.style.height=pct(Math.abs(y-start.y))});
-stage.addEventListener('pointerup',e=>{if(!start)return;const r=img.getBoundingClientRect();const x=Math.min(Math.max((e.clientX-r.left)/r.width,0),1),y=Math.min(Math.max((e.clientY-r.top)/r.height,0),1);
+stage.addEventListener('pointerup',e=>{if(!start||drag)return;const r=img.getBoundingClientRect();const x=Math.min(Math.max((e.clientX-r.left)/r.width,0),1),y=Math.min(Math.max((e.clientY-r.top)/r.height,0),1);
   const box=[Math.min(x,start.x),Math.min(y,start.y),Math.abs(x-start.x),Math.abs(y-start.y)];ghost.remove();start=null;
   if(box[2]>0.008&&box[3]>0.008){manual.push({box:box,kind:'manual',on:true,label:'Your area'})}render()});
 document.getElementById('bBefore').onclick=()=>{stage.classList.remove('after');bBefore.classList.add('sel');bAfter.classList.remove('sel')};

@@ -133,3 +133,22 @@ def test_T6_no_network_shell_or_global_settings():
                      r"os\.system|os\.popen|Popen|urlopen|webbrowser|MAX_IMAGE_PIXELS|register_heif_opener|warnings\.filterwarnings")
     for f in ROOT.glob("*.py"):
         assert not bad.search(f.read_text()), f.name
+
+
+# orientation: a photo is turned upright exactly once (a portrait HEIC once came out sideways)
+@pytest.mark.skipif(not REAL_HEIC.exists(), reason="real iPhone photo not available")
+def test_heic_is_turned_upright_exactly_once(folder):
+    import pillow_heif
+    from PIL import ImageOps
+    tools = importlib.import_module("sharewise.tools")
+    expected = ImageOps.exif_transpose(pillow_heif.open_heif(str(REAL_HEIC)).to_pillow()).size
+    assert tools.load_upright(folder / "IMG_7296.HEIC").size == expected
+    dest = clean.clean_copy(folder / "IMG_7296.HEIC", folder / "Sharewise")
+    with Image.open(dest) as im:
+        assert im.size == expected and im.getexif().get(274, 1) == 1
+
+
+def test_jpeg_orientation_applied_once(folder):
+    tools = importlib.import_module("sharewise.tools")
+    up = tools.load_upright(folder / "IMG_0001.JPG")                 # stored 640x480 with orientation 6 (rotate 90)
+    assert up.size == (480, 640)

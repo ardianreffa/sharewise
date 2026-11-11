@@ -151,9 +151,8 @@ def clean_copy(src: Path, out_dir: Path, keep=()) -> Path:
             ex = Image.Exif()
             if h.info.get("exif"):
                 raw = h.info["exif"]; ex.load(raw[6:] if raw[:6] == b"Exif\x00\x00" else raw)
-            im = h.to_pillow(); im.info.pop("exif", None)
-            if ex.get(274): im.getexif()[274] = ex.get(274)
-            im = ImageOps.exif_transpose(im).convert("RGB")      # bake the rotation in; no orientation tag needed
+            im = h.to_pillow()                                    # pillow-heif has already applied the rotation
+            im = ImageOps.exif_transpose(im).convert("RGB"); im.info.pop("exif", None)
             k = kept_exif(ex, keep, h.info.get("xmp"), orientation=False)
             kw = {"quality": 92, "subsampling": "4:2:0"}
             if h.info.get("icc_profile"): kw["icc_profile"] = h.info["icc_profile"]
