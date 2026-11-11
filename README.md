@@ -1,5 +1,7 @@
 # Sharewise
 
+![Sharewise: see what your photos reveal, hide what matters, share clean copies](docs/banner.jpg)
+
 **See what your photos and videos reveal before you share them.** A photo or video from a phone usually carries the exact place it was
 taken (often to a few metres, with altitude and the direction you faced), the exact time, the phone model, unique
 IDs, sometimes a hidden thumbnail of the original and a depth map. Sharewise tells you, in plain words, without ever
