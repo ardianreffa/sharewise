@@ -258,9 +258,15 @@ class Sharewise:
         extra = sorted(set(args) - {"check_id", "keep", "selection_codes", "add_areas", "photos"})
         if extra:
             return None, f"only check_id, photos, keep, selection_codes and add_areas are accepted (got {extra}); never file paths"
-        c = self._load(args.get("check_id"))
-        if c is None or (args.get("check_id") and args["check_id"] != c["id"]):
-            return None, "unknown or missing check_id; run sharewise_check first"
+        cid = args.get("check_id")
+        codes_in = args.get("selection_codes") or []
+        if isinstance(codes_in, str): codes_in = [codes_in]
+        if not cid and codes_in:                                   # a selection code carries its own check id
+            first = parse_code(codes_in[0])
+            cid = first["check"] if first else None
+        c = self._load(cid)
+        if c is None or (cid and cid != c["id"]):
+            return None, "unknown or missing check_id; run sharewise_check first (or pass the user's selection code)"
         keep = args.get("keep") or []
         if isinstance(keep, str): keep = [keep]
         bad = [k for k in keep if k not in self.KEEPABLE]

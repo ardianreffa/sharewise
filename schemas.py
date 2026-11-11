@@ -32,12 +32,14 @@ SHARE = {
     "description": (
         "Make the copies to share, in a Sharewise folder next to the photos: hidden areas are rebuilt from their "
         "surroundings (nothing of the original is kept), and all metadata is removed except copyright and what the user "
-        "chose to keep. Every copy is re-read and verified. Pass the user's selection codes from the review pages as given. "
+        "chose to keep. Every copy is re-read and verified. Pass the user's selection codes from the review pages as given: a "
+        "code (SW1./SW2.<check id>.<photo>...) contains its check id and photo number, so a code alone is enough, even in a "
+        "new conversation; do not ask for a folder or check id then. "
         "You may ADD areas (add_areas) when the user asks or agrees; you cannot switch areas off. Keeping location needs "
         "the user's approval in Hermes. Call it only when the user's current message asks for the copies."
     ),
     "parameters": {"type": "object", "properties": {
-        "check_id": {"type": "string"},
+        "check_id": {"type": "string", "description": "Optional when a selection code is given: the code contains its check id."},
         "photos": {"type": "array", "items": {"type": "integer"}, "description": "Photo numbers (default: all)."},
         "keep": {"type": "array", "items": {"type": "string", "enum": ["time", "device", "location"]},
                  "description": "Only what the user explicitly wants to keep. Default: nothing."},
@@ -47,7 +49,7 @@ SHARE = {
             "shape": {"type": "string", "enum": ["oval", "rect"], "description": "oval for faces (default), rect for signs and plates"},
             "angle": {"type": "number", "description": "rotation in degrees, clockwise, about the area's centre (default 0)"}}},
             "description": "Extra areas to hide that the user asked for or agreed to."}},
-        "required": ["check_id"]},
+        "required": []},
 }
 
 LOOK = {

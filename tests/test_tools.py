@@ -194,3 +194,14 @@ def test_added_areas_validate_shape_and_angle(sw, folder):
     assert sw.approval_request(ok) is None
     bad = {"check_id": cid, "photos": [1], "add_areas": [{"photo": 1, "box": [0.1, 0.1, 0.2, 0.1], "shape": "star"}]}
     assert sw.approval_request(bad)["action"] == "block"
+
+
+def test_a_selection_code_alone_is_enough(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    sw.review({"check_id": cid, "photos": [1]})
+    body = f"{cid}.1.0.none"; code = f"SW2.{body}.{tools.code_checksum(body)}"
+    fresh = tools.Sharewise(Ctx())                                       # a new conversation: no last check in state
+    args = {"selection_codes": [code]}
+    assert fresh.approval_request(args) is None
+    r = json.loads(fresh.share(args))
+    assert r["copies"] >= 1 and any(m["photo"] == 1 and m["areas_hidden"] == 1 for m in r["made"])
