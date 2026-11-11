@@ -1,0 +1,122 @@
+"""Walls at the tool layer: T1 (no values anywhere), T8, T9, R3, R4, and vision on finished copies only."""
+import importlib, json, os, sqlite3, sys
+from pathlib import Path
+import numpy as np
+import pytest
+from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).parent))
+import test_walls as W                                                   # reuses the planted-secret photos
+from test_walls import folder  # noqa: F401  (pytest fixture)
+
+tools = importlib.import_module("sharewise.tools"); detect = importlib.import_module("sharewise.detect")
+meta = importlib.import_module("sharewise.meta"); redact = importlib.import_module("sharewise.redact")
+
+
+class State(dict):
+    def get(self, k, default=None): return json.loads(json.dumps(super().get(k, default)))
+    def set(self, k, v): self[k] = json.loads(json.dumps(v))
+
+
+class Ctx:
+    def __init__(self): self.state = State()
+
+
+FACE = (0.40, 0.30, 0.20, 0.25)
+
+
+@pytest.fixture
+def sw(folder, monkeypatch):
+    # a stand-in detector: one face and one street sign (Apple Vision is macOS-only)
+    monkeypatch.setattr(detect, "detect", lambda up, wd: [
+        {"box": FACE, "kind": "face", "on": True, "why": "face"},
+        {"box": (0.05, 0.05, 0.30, 0.08), "kind": "text", "on": True, "why": "street name"},
+        {"box": (0.60, 0.80, 0.30, 0.10), "kind": "text", "on": False, "why": "other text"}])
+    return tools.Sharewise(Ctx())
+
+
+def call_share(s, args):
+    gate = s.approval_request(args)
+    if gate and gate.get("action") == "block":
+        return {"blocked": gate["message"]}
+    return json.loads(s.share(args))
+
+
+def all_text(folder, s):
+    blobs = []
+    data = s._data_dir()
+    for p in data.rglob("*"):
+        if p.is_file(): blobs.append(p.read_bytes())
+    return blobs
+
+
+# T1 ------------------------------------------------------------------ no value in any output, stored file or page
+def test_T1_no_secret_anywhere(sw, folder):
+    outs = [sw.check({"folder": str(folder)})]
+    cid = json.loads(outs[0])["check_id"]
+    outs.append(sw.review({"check_id": cid}))
+    outs.append(json.dumps(call_share(sw, {"check_id": cid})))
+    outs.append(sw.look({"check_id": cid}))
+    for o in outs:
+        assert not W.leaked(o.encode()), W.leaked(o.encode())
+    for blob in all_text(folder, sw):                                    # database, review pages, look images
+        assert not W.leaked(blob)
+    for p in (folder / "Sharewise").iterdir():
+        assert not W.leaked(p.read_bytes()) and not meta.risky(meta.findings(p))
+
+
+# T9 ------------------------------------------------------------------ fixed arguments only
+def test_T9_paths_and_unknown_arguments_are_blocked(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    for bad in ({"check_id": cid, "paths": ["/etc/passwd"]}, {"check_id": cid, "keep": ["serials"]},
+                {"check_id": "deadbeef"}, {"check_id": cid, "selection_codes": ["SW1.0000.1.0.none.zz"]},
+                {"check_id": cid, "add_areas": [{"photo": 1, "box": [0, 0, 2, 2]}]}):
+        assert "blocked" in call_share(sw, bad), bad
+    assert "refused" in json.loads(sw.share({"check_id": cid}))["error"]          # the hook was not reached
+
+
+# T8 ------------------------------------------------------------------ keeping location needs Hermes' approval
+def test_T8_keep_location_goes_to_the_approval_gate(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    gate = sw.approval_request({"check_id": cid, "keep": ["location"]})
+    assert gate["action"] == "approve" and "location" in gate["message"].lower()
+    assert sw.approval_request({"check_id": cid, "keep": ["time"]}) is None       # no prompt needed for time
+
+
+# R3 + R4 ------------------------------------------------------------------ hidden copies are clean; the agent can only add
+def test_R3_R4_hidden_copy_clean_and_agent_cannot_switch_off(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    sw.review({"check_id": cid, "photos": [1]})
+    r = call_share(sw, {"check_id": cid, "photos": [1], "add_areas": [{"photo": 1, "box": [0.7, 0.6, 0.1, 0.1]}]})
+    assert r["copies"] == 1 and r["made"][0]["areas_hidden"] == 3           # face + street sign + the agent's area (other text stays off)
+    dest = folder / "Sharewise" / r["made"][0]["copy"]
+    assert not meta.risky(meta.findings(dest)) and meta.findings(dest)["copyright"]
+    # the face is destroyed: inverting the original face does not change the copy
+    with Image.open(dest) as out:
+        assert out.size[0] > 0
+    # there is no argument through which the agent could switch the face off
+    assert "blocked" in call_share(sw, {"check_id": cid, "photos": [1], "remove_areas": [0]})
+
+
+def test_selection_code_is_the_only_way_to_switch_off(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    sw.review({"check_id": cid, "photos": [1]})
+    body = f"{cid}.1.1.none"                                                 # user switched the face (id 0) off
+    code = f"SW1.{body}.{tools.code_checksum(body)}"
+    r = call_share(sw, {"check_id": cid, "photos": [1], "selection_codes": [code]})
+    assert r["made"][0]["areas_hidden"] == 1
+    tampered = code[:-1] + ("0" if code[-1] != "0" else "1")
+    assert "blocked" in call_share(sw, {"check_id": cid, "photos": [1], "selection_codes": [tampered]})
+
+
+# vision ------------------------------------------------------------------ the agent only ever sees finished copies
+def test_look_returns_finished_copies_only(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    assert "error" in json.loads(sw.look({"check_id": cid}))                 # nothing before the copies exist
+    sw.review({"check_id": cid, "photos": [1]}); call_share(sw, {"check_id": cid, "photos": [1]})
+    imgs = json.loads(sw.look({"check_id": cid}))["images"]
+    assert len(imgs) == 1
+    with Image.open(imgs[0]["image"]) as im:
+        assert not im.getexif() and not im.info.get("xmp")
+    original = W.scene()
+    assert not np.array_equal(np.asarray(Image.open(imgs[0]["image"]).resize((64, 48))), np.asarray(original.resize((64, 48))))

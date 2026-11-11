@@ -1,0 +1,27 @@
+name: sharewise
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >-
+  See what your photos and videos reveal before you share them. Reports, as yes/no only, location,
+  time, device, IDs and hidden thumbnails; on macOS finds faces, street names, house numbers and plates
+  in photos with Apple Vision on this computer; lets you review every area; hides them for good (rebuilt
+  from the surroundings, nothing kept); and makes verified clean copies, videos without re-encoding.
+  Originals are never changed.
+author: ardianreffa
+license: MIT
+homepage: https://github.com/ardianreffa/sharewise
+tags: [privacy, photos, videos, metadata, faces, local]
+requires_hermes: ">=0.22.6"
+provides_tools:
+  - sharewise_check
+  - sharewise_review
+  - sharewise_share
+  - sharewise_look
+provides_hooks:
+  - pre_tool_call
+python_dependencies:
+  - "Pillow>=11.0,<14"
+  - "pillow-heif>=1.4,<2"
+  - "numpy>=2.0,<3"
+  - "pyobjc-framework-Vision>=10.3,<13; sys_platform == 'darwin'"
