@@ -35,7 +35,7 @@ LABEL = {"location": "exact location (GPS)", "location_detail": "altitude, speed
          "owner": "owner or author name", "comments": "captions or comments", "hidden_thumbnail": "a hidden thumbnail of the original",
          "edit_history": "editing history", "depth_map": "a depth map / extra images",
          "face_data": "per-frame face positions recorded by the camera (videos)"}
-CODE = re.compile(r"^SW1\.([0-9a-f]{8})\.(\d{1,4})\.([0-9,]+|none)\.((?:\d{12})(?:-\d{12})*|none)\.([0-9a-z]{1,4})$")
+CODE = re.compile(r"^SW([12])\.([0-9a-f]{8})\.(\d{1,4})\.([0-9,]+|none)\.((?:\d{12}(?:a\d{3}[or])?)(?:-\d{12}(?:a\d{3}[or])?)*|none)\.([0-9a-z]{1,4})$")
 APPROVAL_WINDOW = 600.0
 
 
@@ -75,7 +75,7 @@ def parse_code(code: str) -> Optional[dict]:
     m = CODE.match((code or "").strip())
     if not m:
         return None
-    check, photo, ids, boxes, chk = m.groups()
+    ver, check, photo, ids, boxes, chk = m.groups()
     body = f"{check}.{photo}.{ids}.{boxes}"
     if code_checksum(body) != chk:
         return None
@@ -84,8 +84,11 @@ def parse_code(code: str) -> Optional[dict]:
     if boxes != "none":
         for b in boxes.split("-"):
             v = [int(b[i:i + 3]) / 1000 for i in range(0, 12, 3)]
+            ang, shape = 0.0, "oval"
+            if len(b) > 12:
+                ang = float(int(b[13:16])); shape = "rect" if b[16] == "r" else "oval"
             if v[2] > 0 and v[3] > 0:
-                manual.append(tuple(v))
+                manual.append({"box": tuple(v), "angle": ang, "shape": shape})
     return {"check": check, "photo": int(photo), "on": on, "manual": manual}
 
 
@@ -230,7 +233,8 @@ class Sharewise:
                 found = detect.detect(up, self._data_dir() / "tmp")
             except detect.DetectUnavailable as exc:
                 found, unavailable = [], str(exc)
-            areas = [{"id": i, "box": tuple(a["box"]), "kind": a["kind"], "on": a["on"], "why": a["why"]} for i, a in enumerate(found)]
+            areas = [{"id": i, "box": tuple(a["box"]), "kind": a["kind"], "on": a["on"], "why": a["why"],
+                      "angle": a.get("angle", 0.0), "shape": a.get("shape")} for i, a in enumerate(found)]
             c["areas"][str(n)] = areas
             page = review.build(up, areas, c["id"], n, src.name, out_dir)
             pages.append(str(page))
@@ -274,7 +278,10 @@ class Sharewise:
         if not isinstance(adds, list) or len(adds) > 60:
             return None, "add_areas must be a list of at most 60 areas"
         for a in adds:
-            if not (isinstance(a, dict) and set(a) <= {"photo", "box"} and isinstance(a.get("photo"), int)
+            if isinstance(a, dict) and ("shape" in a and a["shape"] not in ("oval", "rect") or
+                                        "angle" in a and not isinstance(a["angle"], (int, float))):
+                return None, "an added area's shape must be 'oval' or 'rect' and its angle a number of degrees"
+            if not (isinstance(a, dict) and set(a) <= {"photo", "box", "shape", "angle"} and isinstance(a.get("photo"), int)
                     and 1 <= a["photo"] <= len(c["photos"]) and isinstance(a.get("box"), (list, tuple)) and len(a["box"]) == 4
                     and all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in a["box"]) and a["box"][2] > 0 and a["box"][3] > 0):
                 return None, "each added area needs a photo number and a box [x, y, width, height] between 0 and 1"
@@ -313,18 +320,21 @@ class Sharewise:
         codes = {p["photo"]: p for p in sel["codes"]}
         adds: dict = {}
         for a in sel["adds"]:
-            adds.setdefault(a["photo"], []).append(tuple(float(v) for v in a["box"]))
+            adds.setdefault(a["photo"], []).append({"box": tuple(float(v) for v in a["box"]), "shape": a.get("shape", "oval"),
+                                                   "angle": float(a.get("angle", 0.0))})
         made, failed, hidden_total = [], [], 0
         for n in sel["photos"]:
             item = c["photos"][n - 1]; src = Path(item["path"])
             areas = c["areas"].get(str(n), [])
+            reg = lambda a: {"box": tuple(a["box"]), "kind": a["kind"], "angle": a.get("angle", 0.0), "shape": a.get("shape")}
             if n in codes:                                   # the user's own choices from the review page
                 on = set(codes[n]["on"])
-                regions = [{"box": a["box"], "kind": a["kind"]} for a in areas if a["id"] in on]
-                regions += [{"box": b, "kind": "manual"} for b in codes[n]["manual"]]
+                regions = [reg(a) for a in areas if a["id"] in on]
+                regions += [{"box": m["box"], "kind": "manual", "angle": m["angle"], "shape": m["shape"]} for m in codes[n]["manual"]]
             else:                                            # default: everything the detector proposed as "on"
-                regions = [{"box": a["box"], "kind": a["kind"]} for a in areas if a["on"]]
-            regions += [{"box": b, "kind": "manual"} for b in adds.get(n, [])]     # R4: the agent can only add
+                regions = [reg(a) for a in areas if a["on"]]
+            regions += [{"box": b["box"], "kind": "manual", "angle": b.get("angle", 0.0), "shape": b.get("shape", "oval")}
+                        for b in adds.get(n, [])]           # R4: the agent can only add
             prev = c["outputs"].get(str(n))
             try:
                 if prev and Path(prev).exists() and Path(prev).parent == out_dir:

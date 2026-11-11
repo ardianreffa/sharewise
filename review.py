@@ -33,12 +33,13 @@ def build(upright: Image.Image, areas: list[dict], check_id: str, photo_index: i
     data = {"check": check_id, "photo": photo_index, "areas": []}
     for a in areas:
         # each area is rendered on its own, so the "after" view can follow every click
-        x0, y0, x1, y1 = redact.to_pixels(a["box"], (W, H), redact.PAD.get(a["kind"], 0.0))
+        x0, y0, x1, y1 = redact.to_pixels(a["box"], (W, H), redact.PAD.get(a["kind"], 0.0), a.get("angle") or 0.0)
         m = max(4, int(max(x1 - x0, y1 - y0) * 0.12))
         px0, py0, px1, py1 = max(0, x0 - m), max(0, y0 - m), min(W, x1 + m), min(H, y1 + m)
         patch = redact.redact(small, [a]).crop((px0, py0, px1, py1))
         data["areas"].append({"id": a["id"], "box": [round(v, 4) for v in a["box"]], "kind": a["kind"], "on": a["on"],
                               "label": KIND_LABEL.get(a["kind"], a["kind"]), "patch": _data_uri(patch),
+                              "angle": round(float(a.get("angle") or 0.0), 1), "shape": redact.shape_of(a),
                               "pbox": [px0 / W, py0 / H, (px1 - px0) / W, (py1 - py0) / H]})
     page = TEMPLATE.replace("__BEFORE__", _data_uri(small)).replace("__AFTER__", "") \
                    .replace("__DATA__", html.escape(json.dumps(data), quote=False)).replace("__NAME__", html.escape(name)) \
@@ -53,23 +54,28 @@ TEMPLATE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta 
 :root{--bg:#e9ecea;--panel:#fbfcfb;--ink:#1c2321;--soft:#5b6662;--on:#a8640a;--off:#7d8783;--add:#2f6b4f;--line:#cfd6d2;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#161a19;--panel:#1f2523;--ink:#e6ebe8;--soft:#9aa6a1;--on:#e0a24a;--off:#7a8580;--add:#6fbf96;--line:#2e3633;color-scheme:dark}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,system-ui,"Segoe UI",sans-serif}
-main{max-width:1180px;margin:0 auto;padding:28px 20px 60px}h1{font-size:26px;margin:0 0 4px}p.lede{color:var(--soft);margin:0 0 18px;max-width:80ch}
+main{max-width:1180px;margin:0 auto;padding:28px 20px 60px}h1{font-size:26px;margin:0 0 4px}p.lede{color:var(--soft);margin:0 0 18px;max-width:86ch}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:7px 16px;cursor:pointer}
 button.sel{border-color:var(--ink);font-weight:600}
-.stage{position:relative;display:inline-block;max-width:100%;user-select:none;touch-action:none}
-.stage img{display:block;max-width:100%;height:auto;border-radius:10px}
-.box{position:absolute;border:3px solid var(--on);border-radius:50%;background:rgba(224,162,74,.12);cursor:pointer}
-.box.text,.box.plate{border-radius:8px}.box.manual{border-radius:50%;border-color:var(--add);background:rgba(111,191,150,.14)}
-.box.off{border-style:dashed;border-color:var(--off);background:transparent}
-.tag{position:absolute;left:0;top:-24px;font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 6px;white-space:nowrap;color:var(--ink)}
-.handle{position:absolute;right:-7px;bottom:-7px;width:14px;height:14px;border-radius:3px;background:var(--panel);border:2px solid currentColor;cursor:nwse-resize}
-.box{color:var(--on)}.box.manual{color:var(--add)}.box.off .handle{display:none}
+.stage{position:relative;display:inline-block;max-width:100%;user-select:none;touch-action:none;overflow:hidden;border-radius:10px}
+.stage>img#img{display:block;max-width:100%;height:auto}
+.box{position:absolute;border:3px solid currentColor;color:var(--on);background:rgba(224,162,74,.10);cursor:move;transform-origin:50% 50%}
+.box.oval{border-radius:50%}.box.rect{border-radius:6px}
+.box.manual{color:var(--add);background:rgba(111,191,150,.14)}
+.box.off{border-style:dashed;color:var(--off);background:transparent}
+.tag{position:absolute;left:0;top:-26px;font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 6px;white-space:nowrap;color:var(--ink)}
+.ctl{position:absolute;width:16px;height:16px;border-radius:4px;background:var(--panel);border:2px solid currentColor}
+.resize{right:-9px;bottom:-9px;cursor:nwse-resize}
+.rotate{left:50%;top:-30px;margin-left:-8px;border-radius:50%;cursor:grab}
+.rotate::after{content:"";position:absolute;left:5px;top:14px;width:2px;height:14px;background:currentColor}
+.shape{right:-9px;top:-9px;width:20px;height:20px;font-size:11px;line-height:15px;text-align:center;cursor:pointer;color:var(--ink)}
+.box.off .ctl{display:none}
 .drawing{position:absolute;border:2px dashed var(--add);border-radius:50%;pointer-events:none}
-.after .box,.after .tag{display:none}
-.stage img.patch{position:absolute;pointer-events:none;display:none;max-width:none;border-radius:0}.stage.after img.patch.on{display:block}
-.ph{position:absolute;pointer-events:none;display:none;border-radius:50%;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);background:rgba(160,150,140,.35)}
-.after .ph{display:block}
+.stage img.patch{position:absolute;pointer-events:none;display:none;max-width:none;border-radius:0}
+.stage.after img.patch.on{display:block}
+#approx{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;display:none}
+.stage.after #approx{display:block}.stage.after .box{display:none}
 .legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--soft);font-size:14px;margin:12px 0}
 .legend i{display:inline-block;width:14px;height:14px;border-radius:50%;border:3px solid var(--on);vertical-align:-2px;margin-right:6px}
 .legend i.off{border-style:dashed;border-color:var(--off)}.legend i.add{border-color:var(--add);border-radius:4px}
@@ -78,63 +84,94 @@ button.sel{border-color:var(--ink);font-weight:600}
 .note{font-size:14px;color:var(--soft)}
 </style></head><body><main>
 <h1>Sharewise review: __NAME__</h1>
-<p class="lede">Nothing has been changed. <b>Click</b> an area to switch it off or on (for example your own face in a selfie). <b>Drag an area</b> to move it, or <b>drag its corner</b> to resize it. <b>Drag on the photo</b> to add an area the detector missed. Then copy the code below and paste it to Hermes. Hidden areas are rebuilt from their surroundings: nothing of what was there is kept.</p>
+<p class="lede">Nothing has been changed. <b>Click</b> an area to switch it off or on (for example your own face in a selfie). <b>Drag</b> an area to move it,
+its <b>corner</b> to resize, its <b>top dot</b> to rotate, and its <b>◯/▭ button</b> to change the shape (ovals for faces, rectangles for signs and plates).
+<b>Drag on the photo</b> to add an area the detector missed. Then copy the code below and paste it to Hermes.
+Ovals are rebuilt from their surroundings; rectangles become a blank plate in the sign's own colour. Nothing of what was there is kept.</p>
 <div class="bar"><button id="bBefore" class="sel">Before: areas to hide</button><button id="bAfter">After: preview</button><button id="bUndo">Remove my last area</button></div>
-<div class="stage" id="stage"><img id="img" src="__BEFORE__" width="__W__" height="__H__" alt="photo" draggable="false"></div>
+<div class="stage" id="stage"><img id="img" src="__BEFORE__" width="__W__" height="__H__" alt="photo" draggable="false"><canvas id="approx"></canvas></div>
 <div class="legend"><span><i></i>will be hidden</span><span><i class="off"></i>switched off (stays visible)</span><span><i class="add"></i>your own area</span></div>
 <div class="code"><b>Selection code</b> <span class="note">(paste this to Hermes, or run <code>/sharewise apply &lt;code&gt;</code>)</span>
 <textarea id="code" rows="2" readonly></textarea><div class="note" id="sum"></div></div>
-<p class="note">The "after" view follows your clicks. Areas you draw yourself show as a soft placeholder here; Hermes shows you their exact result before anything is saved.</p>
+<p class="note">The "after" view is exact for detected areas. Areas you changed or drew are shown as a close approximation; Hermes shows you the exact result before anything is shared.</p>
 </main><script id="data" type="application/json">__DATA__</script><script>
 (function(){
 const D=JSON.parse(document.getElementById('data').textContent.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&'));
-const stage=document.getElementById('stage'),img=document.getElementById('img');
-let manual=[];
-function pct(v){return (v*100).toFixed(3)+'%'}
-function place(el,b){el.style.left=pct(b[0]);el.style.top=pct(b[1]);el.style.width=pct(b[2]);el.style.height=pct(b[3])}
-D.areas.forEach(a=>{const p=document.createElement('img');p.className='patch';p.src=a.patch;place(p,a.pbox);stage.appendChild(p);a.el=p});
+const stage=document.getElementById('stage'),img=document.getElementById('img'),cv=document.getElementById('approx');
+let manual=[],drag=null,start=null,ghost=null,px=null;
+const pct=v=>(v*100).toFixed(3)+'%';
+function own(a){ if(a.kind==='manual')return a; a.on=false;
+  const m={box:a.box.slice(),kind:'manual',on:true,label:'Your area',angle:a.angle||0,shape:a.shape||'oval'}; manual.push(m); return m}
+D.areas.forEach(a=>{a.angle=a.angle||0;a.shape=a.shape||'oval';const p=document.createElement('img');p.className='patch';p.src=a.patch;
+  p.style.left=pct(a.pbox[0]);p.style.top=pct(a.pbox[1]);p.style.width=pct(a.pbox[2]);p.style.height=pct(a.pbox[3]);stage.appendChild(p);a.el=p});
+function sizePx(){const r=img.getBoundingClientRect();return {W:r.width,H:r.height,L:r.left,T:r.top}}
 function render(){
-  stage.querySelectorAll('.box,.ph').forEach(b=>b.remove());
+  stage.querySelectorAll('.box').forEach(b=>b.remove());
   D.areas.forEach(a=>a.el.classList.toggle('on',a.on));
-  manual.forEach(m=>{const p=document.createElement('div');p.className='ph';place(p,m.box);stage.appendChild(p)});
   D.areas.concat(manual).forEach(a=>{
-    const b=document.createElement('div');b.className='box '+a.kind+(a.on?'':' off');
-    b.style.left=pct(a.box[0]);b.style.top=pct(a.box[1]);b.style.width=pct(a.box[2]);b.style.height=pct(a.box[3]);
+    const b=document.createElement('div');b.className='box '+a.kind+' '+a.shape+(a.on?'':' off');
+    b.style.left=pct(a.box[0]+a.box[2]/2);b.style.top=pct(a.box[1]+a.box[3]/2);b.style.width=pct(a.box[2]);b.style.height=pct(a.box[3]);
+    b.style.transform='translate(-50%,-50%) rotate('+a.angle+'deg)';
     const t=document.createElement('span');t.className='tag';t.textContent=a.label+(a.on?'':' (off)');b.appendChild(t);
-    const hd=document.createElement('span');hd.className='handle';b.appendChild(hd);
+    const rs=document.createElement('span');rs.className='ctl resize';b.appendChild(rs);
+    const ro=document.createElement('span');ro.className='ctl rotate';b.appendChild(ro);
+    const sh=document.createElement('span');sh.className='ctl shape';sh.textContent=a.shape==='oval'?'▭':'◯';sh.title='change shape';b.appendChild(sh);
     b.addEventListener('pointerdown',e=>{e.stopPropagation();e.preventDefault();
-      drag={a:a,mode:(e.target===hd?'resize':'move'),x:e.clientX,y:e.clientY,box:a.box.slice(),moved:false};stage.setPointerCapture(e.pointerId)});
+      const mode=e.target===rs?'resize':e.target===ro?'rotate':e.target===sh?'shape':'move';
+      drag={a:a,mode:mode,x:e.clientX,y:e.clientY,box:a.box.slice(),angle:a.angle,moved:false};stage.setPointerCapture(e.pointerId)});
     stage.appendChild(b)});
+  // selection code (v2): detected areas switched on + the user's own areas with angle and shape
   const ids=D.areas.filter(a=>a.on).map(a=>a.id).join(',');
-  const mb=manual.map(m=>m.box.map(v=>Math.round(v*1000).toString().padStart(3,'0')).join('')).join('-');
-  let body=D.check+'.'+D.photo+'.'+(ids||'none')+'.'+(mb||'none');
+  const n3=v=>Math.round(Math.min(Math.max(v,0),0.999)*1000).toString().padStart(3,'0');
+  const mb=manual.map(m=>n3(m.box[0])+n3(m.box[1])+n3(Math.max(m.box[2],0.001))+n3(Math.max(m.box[3],0.001))+
+     'a'+(((Math.round(m.angle)%360)+360)%360).toString().padStart(3,'0')+(m.shape==='rect'?'r':'o')).join('-');
+  const body=D.check+'.'+D.photo+'.'+(ids||'none')+'.'+(mb||'none');
   let h=0;for(const c of body){h=(h*31+c.charCodeAt(0))>>>0}
-  document.getElementById('code').value='SW1.'+body+'.'+(h%46656).toString(36);
-  const off=D.areas.filter(a=>!a.on).length;
-  document.getElementById('sum').textContent=(D.areas.filter(a=>a.on).length+manual.length)+' areas will be hidden, '+off+' switched off, '+manual.length+' added by you.';
+  document.getElementById('code').value='SW2.'+body+'.'+(h%46656).toString(36);
+  document.getElementById('sum').textContent=(D.areas.filter(a=>a.on).length+manual.length)+' areas will be hidden, '+
+     D.areas.filter(a=>!a.on).length+' switched off, '+manual.length+' yours.';
+  if(stage.classList.contains('after'))drawApprox();
 }
-let start=null,ghost=null,drag=null;
-function own(a){ // moving or resizing a detected area turns it into the user's own area at the new place
-  if(a.kind==='manual')return a;
-  a.on=false;const m={box:a.box.slice(),kind:'manual',on:true,label:'Your area'};manual.push(m);return m}
-stage.addEventListener('pointermove',e=>{if(!drag)return;const r=img.getBoundingClientRect();
-  const dx=(e.clientX-drag.x)/r.width,dy=(e.clientY-drag.y)/r.height;
-  if(!drag.moved){if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)<5)return;drag.moved=true;drag.a=own(drag.a)}
-  const b=drag.box;
-  if(drag.mode==='move'){drag.a.box=[Math.min(Math.max(b[0]+dx,0),1-b[2]),Math.min(Math.max(b[1]+dy,0),1-b[3]),b[2],b[3]]}
-  else{drag.a.box=[b[0],b[1],Math.min(Math.max(b[2]+dx,0.01),1-b[0]),Math.min(Math.max(b[3]+dy,0.01),1-b[1])]}
-  render()});
-stage.addEventListener('pointerup',e=>{if(!drag)return;const d=drag;drag=null;
-  if(!d.moved){if(d.a.kind==='manual'){manual=manual.filter(m=>m!==d.a)}else{d.a.on=!d.a.on}}render()});
-stage.addEventListener('pointerdown',e=>{if(stage.classList.contains('after')||drag)return;const r=img.getBoundingClientRect();start={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
-  ghost=document.createElement('div');ghost.className='drawing';stage.appendChild(ghost);stage.setPointerCapture(e.pointerId)});
-stage.addEventListener('pointermove',e=>{if(!start||drag)return;const r=img.getBoundingClientRect();const x=Math.min(Math.max((e.clientX-r.left)/r.width,0),1),y=Math.min(Math.max((e.clientY-r.top)/r.height,0),1);
+stage.addEventListener('pointermove',e=>{
+  if(drag){const s=sizePx(),a0=drag;
+    if(!a0.moved){if(Math.abs(e.clientX-a0.x)+Math.abs(e.clientY-a0.y)<4||a0.mode==='shape')return;a0.moved=true;a0.a=own(a0.a)}
+    const a=a0.a,b=a0.box,cx=s.L+(b[0]+b[2]/2)*s.W,cy=s.T+(b[1]+b[3]/2)*s.H;
+    if(a0.mode==='move'){const dx=(e.clientX-a0.x)/s.W,dy=(e.clientY-a0.y)/s.H;a.box=[b[0]+dx,b[1]+dy,b[2],b[3]]}
+    else if(a0.mode==='resize'){const r=-a.angle*Math.PI/180,vx=e.clientX-cx,vy=e.clientY-cy;
+      const lx=Math.abs(vx*Math.cos(r)-vy*Math.sin(r)),ly=Math.abs(vx*Math.sin(r)+vy*Math.cos(r));
+      const w=Math.max(2*lx/s.W,0.01),h=Math.max(2*ly/s.H,0.01);a.box=[b[0]+b[2]/2-w/2,b[1]+b[3]/2-h/2,w,h]}
+    else if(a0.mode==='rotate'){a.angle=Math.round(Math.atan2(e.clientY-cy,e.clientX-cx)*180/Math.PI+90)}
+    render();return}
+  if(!start)return;const s=sizePx();const x=Math.min(Math.max((e.clientX-s.L)/s.W,0),1),y=Math.min(Math.max((e.clientY-s.T)/s.H,0),1);
   ghost.style.left=pct(Math.min(x,start.x));ghost.style.top=pct(Math.min(y,start.y));ghost.style.width=pct(Math.abs(x-start.x));ghost.style.height=pct(Math.abs(y-start.y))});
-stage.addEventListener('pointerup',e=>{if(!start||drag)return;const r=img.getBoundingClientRect();const x=Math.min(Math.max((e.clientX-r.left)/r.width,0),1),y=Math.min(Math.max((e.clientY-r.top)/r.height,0),1);
+stage.addEventListener('pointerup',e=>{
+  if(drag){const d=drag;drag=null;
+    if(d.mode==='shape'&&!d.moved){const a=own(d.a);a.shape=a.shape==='oval'?'rect':'oval'}
+    else if(!d.moved){if(d.a.kind==='manual'){manual=manual.filter(m=>m!==d.a)}else{d.a.on=!d.a.on}}
+    render();return}
+  if(!start)return;const s=sizePx();const x=Math.min(Math.max((e.clientX-s.L)/s.W,0),1),y=Math.min(Math.max((e.clientY-s.T)/s.H,0),1);
   const box=[Math.min(x,start.x),Math.min(y,start.y),Math.abs(x-start.x),Math.abs(y-start.y)];ghost.remove();start=null;
-  if(box[2]>0.008&&box[3]>0.008){manual.push({box:box,kind:'manual',on:true,label:'Your area'})}render()});
+  if(box[2]>0.008&&box[3]>0.008){manual.push({box:box,kind:'manual',on:true,label:'Your area',angle:0,shape:'oval'})}render()});
+stage.addEventListener('pointerdown',e=>{if(stage.classList.contains('after')||drag)return;const s=sizePx();
+  start={x:(e.clientX-s.L)/s.W,y:(e.clientY-s.T)/s.H};ghost=document.createElement('div');ghost.className='drawing';stage.appendChild(ghost);stage.setPointerCapture(e.pointerId)});
+// approximate "after" for the user's own areas: rectangles take the area's own plate colour, ovals the colour around them
+function pixels(){if(px)return px;const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+  const x=c.getContext('2d');x.drawImage(img,0,0);px={w:c.width,h:c.height,d:x.getImageData(0,0,c.width,c.height).data};return px}
+function shapePath(ctx,a,W,H,grow){const cx=(a.box[0]+a.box[2]/2)*W,cy=(a.box[1]+a.box[3]/2)*H,w=a.box[2]*W*grow,h=a.box[3]*H*grow;
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(a.angle*Math.PI/180);ctx.beginPath();
+  if(a.shape==='rect'){ctx.rect(-w/2,-h/2,w,h)}else{ctx.ellipse(0,0,w/2,h/2,0,0,2*Math.PI)}ctx.restore()}
+function average(a,inside){const P=pixels(),m=document.createElement('canvas');m.width=P.w;m.height=P.h;const x=m.getContext('2d');
+  x.fillStyle='#fff';shapePath(x,a,P.w,P.h,inside?1:1.45);x.fill();if(!inside){x.globalCompositeOperation='destination-out';shapePath(x,a,P.w,P.h,1.05);x.fill()}
+  const M=x.getImageData(0,0,P.w,P.h).data;let r=0,g=0,b=0,n=0;
+  for(let i=0;i<M.length;i+=16){if(M[i+3]>200){r+=P.d[i];g+=P.d[i+1];b+=P.d[i+2];n++}}
+  return n?[r/n,g/n,b/n]:[128,128,128]}
+function drawApprox(){const P=pixels();cv.width=P.w;cv.height=P.h;const x=cv.getContext('2d');x.clearRect(0,0,P.w,P.h);
+  const todo=D.areas.filter(a=>a.on&&false).concat(manual);
+  todo.forEach(a=>{const c=average(a,a.shape==='rect');x.save();
+    if(a.shape!=='rect')x.filter='blur('+Math.max(2,Math.round(Math.min(a.box[2]*P.w,a.box[3]*P.h)*0.06))+'px)';
+    x.fillStyle='rgb('+c.map(Math.round).join(',')+')';shapePath(x,a,P.w,P.h,1);x.fill();x.restore()})}
 document.getElementById('bBefore').onclick=()=>{stage.classList.remove('after');bBefore.classList.add('sel');bAfter.classList.remove('sel')};
-document.getElementById('bAfter').onclick=()=>{stage.classList.add('after');bAfter.classList.add('sel');bBefore.classList.remove('sel')};
+document.getElementById('bAfter').onclick=()=>{stage.classList.add('after');bAfter.classList.add('sel');bBefore.classList.remove('sel');drawApprox()};
 document.getElementById('bUndo').onclick=()=>{manual.pop();render()};
 render();
 })();

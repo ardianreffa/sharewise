@@ -18,7 +18,7 @@ from typing import Iterable
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-PAD = {"face": 0.06, "head": 0.06, "text": 0.14, "plate": 0.14, "manual": 0.0}
+PAD = {"face": 0.06, "head": 0.06, "text": 0.06, "plate": 0.06, "manual": 0.0}
 OVAL = ("face", "head", "manual")          # shapes drawn as ovals; detected text and plates stay rounded rectangles
 RING = {"face": 0.30, "head": 0.30, "manual": 0.30}       # faces: sample only the nearest ring (hair, skin, collar) so the head keeps its shape
 NECK = 0.9                                 # faces: also look this many face-heights below, where the neck usually is
@@ -36,12 +36,37 @@ def skin_likelihood(rgb: np.ndarray) -> np.ndarray:
 WORK = 96                                   # the fill is computed on a small grid: it is smooth by design
 
 
-def to_pixels(region, size, pad=0.0):
+def to_pixels(region, size, pad=0.0, angle=0.0):
+    """Pixel bounding box of a region (x, y, w, h in 0..1, rotated by `angle` degrees about its centre)."""
     W, H = size; x, y, w, h = region
-    px, py = w * pad, h * pad
-    x0, y0 = max(0, int((x - px) * W)), max(0, int((y - py) * H))
-    x1, y1 = min(W, int(np.ceil((x + w + px) * W))), min(H, int(np.ceil((y + h + py) * H)))
+    cx, cy = (x + w / 2) * W, (y + h / 2) * H
+    hw, hh = w * (1 + 2 * pad) * W / 2, h * (1 + 2 * pad) * H / 2
+    a = np.radians(angle or 0.0); c, s_ = abs(np.cos(a)), abs(np.sin(a))
+    ex, ey = hw * c + hh * s_, hw * s_ + hh * c
+    x0, y0 = max(0, int(cx - ex)), max(0, int(cy - ey))
+    x1, y1 = min(W, int(np.ceil(cx + ex))), min(H, int(np.ceil(cy + ey)))
     return x0, y0, x1, y1
+
+
+def shape_of(r: dict) -> str:
+    return r.get("shape") or ("rect" if r.get("kind") in ("text", "plate") else "oval")
+
+
+def _polygon(r: dict, size, pad: float):
+    """Outline of the shape in pixel coordinates (rotated rectangle or rotated, face-proportioned oval)."""
+    W, H = size; x, y, w, h = r["box"]; kind = r.get("kind", "manual")
+    cx, cy = (x + w / 2) * W, (y + h / 2) * H
+    hw, hh = w * (1 + 2 * pad) * W / 2, h * (1 + 2 * pad) * H / 2
+    a = np.radians(r.get("angle") or 0.0); ca, sa = np.cos(a), np.sin(a)
+    if shape_of(r) == "rect":
+        pts = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+    else:
+        oy = 0.0
+        if kind in ("face", "head"):                     # slimmer than the box and set a little low: hair stays
+            hw, oy, hh = hw * 0.82, hh * 0.04, hh * 0.96
+        t = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+        pts = list(zip(hw * np.cos(t), oy + hh * np.sin(t)))
+    return [(cx + px * ca - py * sa, cy + px * sa + py * ca) for px, py in pts]
 
 
 def _box_blur(a: np.ndarray, r: int) -> np.ndarray:
@@ -82,22 +107,37 @@ def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image
     H, W = out.shape[:2]
     rng = np.random.default_rng(secrets.randbits(64) if _seed is None else _seed)   # grain never derived from the image
     for r in regions:
-        kind = r.get("kind", "manual")
-        x0, y0, x1, y1 = to_pixels(r["box"], (W, H), PAD.get(kind, 0.0))
+        kind = r.get("kind", "manual"); pad = PAD.get(kind, 0.0); shp = shape_of(r)
+        x0, y0, x1, y1 = to_pixels(r["box"], (W, H), pad, r.get("angle") or 0.0)
         bw, bh = x1 - x0, y1 - y0
         if bw < 2 or bh < 2:
             continue
-        feather = max(3, int(min(bw, bh) * (0.12 if kind in OVAL else 0.09)))
+        feather = max(3, int(min(bw, bh) * (0.12 if shp == "oval" else 0.09)))
         m = int(max(bw, bh) * RING.get(kind, 0.6)) + 4 + feather * 2   # a ring of surroundings around the region
-        below = int(bh * NECK) if kind in OVAL else 0
+        below = int(bh * NECK) if (kind in OVAL and shp == "oval") else 0
         wx0, wy0, wx1, wy1 = max(0, x0 - m), max(0, y0 - m), min(W, x1 + m), min(H, y1 + m + below)
         win = out[wy0:wy1, wx0:wx1].copy(); ww, wh = wx1 - wx0, wy1 - wy0
-        shape = Image.new("L", (ww, wh), 0); shape.paste(_shape_mask(bw, bh, kind), (x0 - wx0, y0 - wy0))
+        shape = Image.new("L", (ww, wh), 0)
+        ImageDraw.Draw(shape).polygon([(px - wx0, py - wy0) for px, py in _polygon(r, (W, H), pad)], fill=255)
         inside = np.asarray(shape, dtype=np.float32) / 255.0
+        if shp == "rect":
+            # signs, plates, house numbers: one flat colour, the most common colour inside the shape (the plate
+            # itself), plus fresh grain. Text lives in the strokes, not in the plate colour, so nothing readable is
+            # kept: the sign stays a sign, with nothing written on it.
+            px_in = win[inside > 0.5]
+            base = np.median(px_in, axis=0) if len(px_in) else win.reshape(-1, 3).mean(axis=0)
+            big = np.broadcast_to(base, win.shape).astype(np.float32).copy()
+            grain = rng.normal(0, 2.0, size=(wh, ww)).astype(np.float32)
+            big += grain[..., None]
+            soft = max(1, feather // 3)                      # a thin anti-aliased edge, no colour spill
+            outer = np.asarray(shape.filter(ImageFilter.GaussianBlur(soft)), dtype=np.float32) / 255.0
+            alpha = np.maximum(inside, outer); alpha[inside > 0] = 1.0
+            out[wy0:wy1, wx0:wx1] = np.clip(big, 0, 255) * alpha[..., None] + win * (1 - alpha[..., None])
+            continue
         # 1) forget the inside: zeroed (with a safety margin) before anything is computed
         guard = np.asarray(shape.filter(ImageFilter.MaxFilter(5)), dtype=np.float32) / 255.0
         known = (guard < 0.5).astype(np.float32)
-        if kind in OVAL:
+        if kind in OVAL and shp == "oval":
             # weight skin-coloured pixels OUTSIDE the face (neck, ears, arms) far above hair and background,
             # so the patch reads as skin instead of a grey mask. The inside is already excluded by `known`.
             skin = skin_likelihood(win) * known
@@ -121,8 +161,7 @@ def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image
         grain = rng.normal(0, 2.4, size=(wh, ww)).astype(np.float32)
         grain = (grain + np.roll(grain, 1, 0) + np.roll(grain, 1, 1) + np.roll(np.roll(grain, 1, 0), 1, 1)) / 2.0
         big += grain[..., None]                                              # fine, soft grain (fresh randomness)
-        # 3) composite: 100% new fill inside; the soft edge is feathered OUTWARD over the background only
-        # a wide, smooth transition OUTSIDE the shape: grow the shape, then soften with a smoothstep curve
+        # 3) composite: 100% new fill inside; a wide, smooth transition OUTSIDE the shape only
         grown = shape.filter(ImageFilter.MaxFilter(min(feather * 2 + 1, 61)))
         outer = np.asarray(grown.filter(ImageFilter.GaussianBlur(feather)), dtype=np.float32) / 255.0
         outer = outer * outer * (3 - 2 * outer)
@@ -131,10 +170,10 @@ def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
 
 
-def shape_pixels(region, size, kind="manual"):
+def shape_pixels(region, size, kind="manual", angle=0.0, shape=None):
     """Boolean mask (full image size) of the pixels a region replaces at 100%."""
-    W, H = size; x0, y0, x1, y1 = to_pixels(region, size, PAD.get(kind, 0.0))
-    m = Image.new("L", size, 0); m.paste(_shape_mask(x1 - x0, y1 - y0, kind), (x0, y0))
+    r = {"box": region, "kind": kind, "angle": angle, "shape": shape}
+    m = Image.new("L", size, 0); ImageDraw.Draw(m).polygon(_polygon(r, size, PAD.get(kind, 0.0)), fill=255)
     return np.asarray(m) > 0
 
 

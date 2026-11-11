@@ -43,7 +43,9 @@ SHARE = {
                  "description": "Only what the user explicitly wants to keep. Default: nothing."},
         "selection_codes": {"type": "array", "items": {"type": "string"}, "description": "Codes the user pasted, exactly as given."},
         "add_areas": {"type": "array", "items": {"type": "object", "properties": {
-            "photo": {"type": "integer"}, "box": {"type": "array", "items": {"type": "number"}, "description": "[x, y, width, height], 0..1, top-left origin"}}},
+            "photo": {"type": "integer"}, "box": {"type": "array", "items": {"type": "number"}, "description": "[x, y, width, height], 0..1, top-left origin"},
+            "shape": {"type": "string", "enum": ["oval", "rect"], "description": "oval for faces (default), rect for signs and plates"},
+            "angle": {"type": "number", "description": "rotation in degrees, clockwise, about the area's centre (default 0)"}}},
             "description": "Extra areas to hide that the user asked for or agreed to."}},
         "required": ["check_id"]},
 }

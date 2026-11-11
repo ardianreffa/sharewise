@@ -41,9 +41,13 @@ Hermes:  Made 5 copies in ~/Pictures/Singapore/Sharewise: 9 areas hidden, every 
 ## Hidden for good
 
 Blur and pixelation keep a transformed copy of what was there and can sometimes be reversed or recognised.
-Sharewise never looks at the pixels inside an area when it fills it: they are discarded first, and the patch is
-rebuilt only from the surroundings (for faces, weighted towards visible skin on the neck and ears, so it blends in),
-with fresh random grain. The tests prove it: changing what was inside an area does not change a single output pixel.
+Faces (ovals): Sharewise never looks at the pixels inside the oval when it fills it: they are discarded first, and the
+patch is rebuilt only from the surroundings (weighted towards visible skin on the neck and ears, so it blends in), with
+fresh random grain. The tests prove it: changing what was inside an oval does not change a single output pixel.
+Signs, plates and house numbers (rectangles, rotated to follow the sign): the area becomes one flat colour, the sign's
+own plate colour, with fresh grain, so the sign stays a sign with nothing written on it. Writing lives in the strokes,
+not in the plate colour; the tests check that no fine detail is left. On the review page every area can be moved,
+resized, rotated and switched between oval and rectangle.
 The copy also drops hidden thumbnails and depth maps, which often still contain the original face.
 
 ## Walls (enforced in code and tested)

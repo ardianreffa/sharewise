@@ -144,10 +144,53 @@ def test_people_without_a_face_are_suggested_switched_off(monkeypatch):
     calls = []
     def fake_vision(img, wd, faces_only):
         calls.append(faces_only)
-        return ([], [] if faces_only else [(0.1, 0.2, 0.2, 0.6)], [] if faces_only else [((0.5, 0.5, 0.2, 0.05), "street name")])
+        return ([], [] if faces_only else [(0.1, 0.2, 0.2, 0.6)], [] if faces_only else [((0.5, 0.5, 0.2, 0.05), 12.0, "street name")])
     monkeypatch.setattr(detect, "_vision", fake_vision)
     found = detect.detect(Image.new("RGB", (4000, 6000)), Path("/tmp/sw_detect_test"))
     head = [a for a in found if a["kind"] == "head"][0]
     assert head["on"] is False and "no face" in head["why"]
-    assert [a for a in found if a["kind"] == "text"][0]["on"] is True
+    txt = [a for a in found if a["kind"] == "text"][0]
+    assert txt["on"] is True and txt["angle"] == 12.0 and txt["shape"] == "rect"
     assert calls[0] is False and all(calls[1:]) and len(calls) > 1      # whole photo first, then face-only tiles
+
+
+# rotation and shapes
+def test_vision_quad_becomes_a_rotated_box():
+    import math
+    # a 0.4 x 0.05 band rotated 20 degrees, centred at (0.5, 0.5), on a square image; Vision's origin is bottom-left
+    W = H = 1000; c = (500, 500); a = math.radians(20); hw, hh = 200, 25
+    def pt(dx, dy):
+        x = c[0] + dx * math.cos(a) - dy * math.sin(a); y = c[1] + dx * math.sin(a) + dy * math.cos(a)
+        return (x / W, 1 - y / H)
+    box, ang = detect.quad_to_box(pt(-hw, -hh), pt(hw, -hh), pt(hw, hh), pt(-hw, hh), (W, H))
+    assert abs(ang - 20) < 0.01 and all(abs(v - e) < 1e-6 for v, e in zip(box, (0.3, 0.475, 0.4, 0.05)))
+
+
+def test_rotated_rectangle_keeps_the_sign_and_removes_the_writing():
+    im = Image.new("RGB", (800, 600), (200, 215, 230)); d = __import__("PIL.ImageDraw", fromlist=["x"]).Draw(im)
+    band = [(150, 230), (650, 380), (640, 420), (140, 270)]
+    d.polygon(band, fill=(30, 110, 80))
+    for i in range(12): d.text((180 + i * 38, 250 + i * 11), "AB"[i % 2], fill=(240, 235, 210))   # "writing"
+    region = {"box": (0.219, 0.5167, 0.55, 0.05), "kind": "text", "angle": 16.7, "shape": "rect"}   # along the band
+    out = redact.redact(im, [region], _seed=1)
+    m = redact.shape_pixels(region["box"], im.size, "text", 16.7, "rect")
+    a = np.asarray(out).astype(float)[m]
+    assert a.std(axis=0).max() < 6                                     # one flat plate colour (plus fine grain): no writing
+    assert abs(a.mean(axis=0) - np.array([30, 110, 80])).max() < 30    # and it is the sign's own colour, not the sky
+    assert np.array_equal(np.asarray(out)[10, 10], np.asarray(im)[10, 10])
+
+
+def test_selection_code_v2_carries_angle_and_shape(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    body = f"{cid}.1.none.200300400100a030r"
+    p = tools.parse_code(f"SW2.{body}.{tools.code_checksum(body)}")
+    assert p["manual"] == [{"box": (0.2, 0.3, 0.4, 0.1), "angle": 30.0, "shape": "rect"}]
+    assert tools.parse_code(f"SW2.{body}.zz") is None
+
+
+def test_added_areas_validate_shape_and_angle(sw, folder):
+    cid = json.loads(sw.check({"folder": str(folder)}))["check_id"]
+    ok = {"check_id": cid, "photos": [1], "add_areas": [{"photo": 1, "box": [0.1, 0.1, 0.2, 0.1], "shape": "rect", "angle": 12}]}
+    assert sw.approval_request(ok) is None
+    bad = {"check_id": cid, "photos": [1], "add_areas": [{"photo": 1, "box": [0.1, 0.1, 0.2, 0.1], "shape": "star"}]}
+    assert sw.approval_request(bad)["action"] == "block"

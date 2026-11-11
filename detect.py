@@ -64,6 +64,26 @@ def _rect(o):
     return (float(x), float(1.0 - y - h), float(w), float(h))          # Vision's origin is bottom-left
 
 
+def quad_to_box(tl, tr, br, bl, size):
+    """Four corners (0..1, bottom-left origin, as Vision gives them) -> (x, y, w, h) top-left origin + angle in degrees."""
+    import math
+    W, H = size
+    P = [(p[0] * W, (1 - p[1]) * H) for p in (tl, tr, br, bl)]               # pixels, top-left origin
+    cx = sum(p[0] for p in P) / 4; cy = sum(p[1] for p in P) / 4
+    w = (math.dist(P[0], P[1]) + math.dist(P[3], P[2])) / 2
+    h = (math.dist(P[0], P[3]) + math.dist(P[1], P[2])) / 2
+    ang = math.degrees(math.atan2(P[1][1] - P[0][1], P[1][0] - P[0][0]))
+    return (cx / W - w / W / 2, cy / H - h / H / 2, w / W, h / H), ang
+
+
+def _quad(o, size):
+    try:
+        pts = [o.topLeft(), o.topRight(), o.bottomRight(), o.bottomLeft()]
+        return quad_to_box(*[(float(p.x), float(p.y)) for p in pts], size)
+    except Exception:
+        return _rect(o), 0.0
+
+
 def _inside(a, b) -> bool:
     ax, ay, aw, ah = a; bx, by, bw, bh = b
     cx, cy = ax + aw / 2, ay + ah / 2
@@ -143,7 +163,8 @@ def _vision(img: Image.Image, workdir: Path, faces_only: bool):
         for o in ((text.results() or []) if text else []):
             cands = o.topCandidates_(1)
             if cands:
-                t.append((_rect(o), _classify(str(cands[0].string()))))   # the words are dropped right here
+                box, ang = _quad(o, img.size)
+                t.append((box, ang, _classify(str(cands[0].string()))))   # the words are dropped right here
         return f, h, t
     finally:
         try:
@@ -177,6 +198,6 @@ def detect(upright: Image.Image, workdir: Path) -> list[dict]:
         hw, hh = bw * 0.46, min(bh * 0.17, bw * 0.62)
         out.append({"box": (bx + (bw - hw) / 2, by, hw, hh), "kind": "head", "on": False,
                     "why": "person, no face found (often facing away)"})
-    for box, why in texts:
-        out.append({"box": box, "kind": "text", "on": why != "other text", "why": why})
+    for box, ang, why in texts:
+        out.append({"box": box, "kind": "text", "on": why != "other text", "why": why, "angle": round(ang, 1), "shape": "rect"})
     return out
