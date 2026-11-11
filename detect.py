@@ -70,51 +70,113 @@ def _inside(a, b) -> bool:
     return bx <= cx <= bx + bw and by <= cy <= by + bh
 
 
-def detect(upright: Image.Image, workdir: Path) -> list[dict]:
-    """[{"box": (x,y,w,h), "kind": "face"|"head"|"text", "on": bool, "why": str}] in 0..1 upright coordinates."""
-    if not available():
-        raise DetectUnavailable("automatic detection needs macOS (Apple Vision); you can still draw areas yourself")
+TILE_EDGE = 2000              # faces are also searched tile by tile at higher resolution (crowds, small faces)
+TILE_OVERLAP = 0.18
+
+
+def tiles_for(size, edge=TILE_EDGE, overlap=TILE_OVERLAP):
+    """Overlapping tiles (x, y, w, h in 0..1) covering a big photo; [] for small photos."""
+    W, H = size
+    if max(W, H) <= edge * 1.25:
+        return []
+    nx = max(1, round(W / (edge * (1 - overlap)))); ny = max(1, round(H / (edge * (1 - overlap))))
+    tw, th = min(1.0, (1 + overlap) / nx), min(1.0, (1 + overlap) / ny)
+    out = []
+    for j in range(ny):
+        for i in range(nx):
+            x = 0.0 if nx == 1 else i * (1 - tw) / (nx - 1)
+            y = 0.0 if ny == 1 else j * (1 - th) / (ny - 1)
+            out.append((x, y, tw, th))
+    return out
+
+
+def from_tile(box, tile):
+    bx, by, bw, bh = box; tx, ty, tw, th = tile
+    return (tx + bx * tw, ty + by * th, bw * tw, bh * th)
+
+
+def _iou(a, b):
+    ax, ay, aw, ah = a; bx, by, bw, bh = b
+    ix = max(0.0, min(ax + aw, bx + bw) - max(ax, bx)); iy = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy; union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def merge_faces(boxes):
+    """One box per face when the whole photo and several tiles found the same face."""
+    out = []
+    for b in sorted(boxes, key=lambda b: -b[2] * b[3]):
+        if any(_iou(b, o) > 0.25 or _inside(b, o) or _inside(o, b) for o in out):
+            continue
+        out.append(b)
+    return out
+
+
+def _vision(img: Image.Image, workdir: Path, faces_only: bool):
+    """Run Apple Vision on one image; returns (face_boxes, human_boxes, [(box, text_kind)]) in that image's 0..1 space."""
     import Vision
     from Foundation import NSURL
-    small = upright.convert("RGB").copy(); small.thumbnail((DETECT_EDGE, DETECT_EDGE))
-    workdir.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(suffix=".png", dir=workdir, delete=False) as fh:
         tmp = Path(fh.name)
     try:
-        small.save(tmp, "PNG")                                           # upright, no metadata
+        img.save(tmp, "PNG")                                             # upright, no metadata
         handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(NSURL.fileURLWithPath_(str(tmp)), None)
-        faces = Vision.VNDetectFaceRectanglesRequest.alloc().init()
-        humans = Vision.VNDetectHumanRectanglesRequest.alloc().init()
-        try:
-            humans.setUpperBodyOnly_(False)
-        except Exception:
-            pass
-        text = Vision.VNRecognizeTextRequest.alloc().init()
-        text.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-        text.setUsesLanguageCorrection_(False)
-        res = handler.performRequests_error_([faces, humans, text], None)
+        faces = Vision.VNDetectFaceRectanglesRequest.alloc().init(); reqs = [faces]
+        humans = text = None
+        if not faces_only:
+            humans = Vision.VNDetectHumanRectanglesRequest.alloc().init()
+            try:
+                humans.setUpperBodyOnly_(False)
+            except Exception:
+                pass
+            text = Vision.VNRecognizeTextRequest.alloc().init()
+            text.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+            text.setUsesLanguageCorrection_(False)
+            reqs += [humans, text]
+        res = handler.performRequests_error_(reqs, None)
         ok = res[0] if isinstance(res, tuple) else bool(res)
         if not ok:
             raise DetectUnavailable("Apple Vision could not analyse this photo")
-        out = []
-        face_boxes = [_rect(o) for o in (faces.results() or [])]
-        out += [{"box": b, "kind": "face", "on": True, "why": "face"} for b in face_boxes]
-        for o in (humans.results() or []):
-            body = _rect(o)
-            if any(_inside(f, body) for f in face_boxes):
-                continue
-            bx, by, bw, bh = body                                        # no visible face: hide where the head is
-            hw, hh = bw * 0.46, min(bh * 0.17, bw * 0.62)
-            out.append({"box": (bx + (bw - hw) / 2, by, hw, hh), "kind": "head", "on": True, "why": "person (head area)"})
-        for o in (text.results() or []):
+        f = [_rect(o) for o in (faces.results() or [])]
+        h = [_rect(o) for o in (humans.results() or [])] if humans else []
+        t = []
+        for o in ((text.results() or []) if text else []):
             cands = o.topCandidates_(1)
-            if not cands:
-                continue
-            why = _classify(str(cands[0].string()))                   # the words are dropped right here
-            out.append({"box": _rect(o), "kind": "text", "on": why != "other text", "why": why})
-        return out
+            if cands:
+                t.append((_rect(o), _classify(str(cands[0].string()))))   # the words are dropped right here
+        return f, h, t
     finally:
         try:
             tmp.unlink()
         except OSError:
             pass
+
+
+def detect(upright: Image.Image, workdir: Path) -> list[dict]:
+    """[{"box": (x,y,w,h), "kind": "face"|"head"|"text", "on": bool, "why": str}] in 0..1 upright coordinates.
+    Faces are searched on the whole photo and again on overlapping high-resolution tiles."""
+    if not available():
+        raise DetectUnavailable("automatic detection needs macOS (Apple Vision); you can still draw areas yourself")
+    workdir.mkdir(parents=True, exist_ok=True)
+    full = upright.convert("RGB")
+    small = full.copy(); small.thumbnail((DETECT_EDGE, DETECT_EDGE))
+    faces, humans, texts = _vision(small, workdir, faces_only=False)
+    W, H = full.size
+    for tile in tiles_for(full.size):
+        x, y, w, h = tile
+        crop = full.crop((int(x * W), int(y * H), int((x + w) * W), int((y + h) * H)))
+        crop.thumbnail((TILE_EDGE, TILE_EDGE))
+        tf, _, _ = _vision(crop, workdir, faces_only=True)
+        faces += [from_tile(b, tile) for b in tf]
+    faces = merge_faces(faces)
+    out = [{"box": b, "kind": "face", "on": True, "why": "face"} for b in faces]
+    for body in humans:
+        if any(_inside(f, body) for f in faces):
+            continue
+        bx, by, bw, bh = body                                            # no face found: suggest the head area, OFF
+        hw, hh = bw * 0.46, min(bh * 0.17, bw * 0.62)
+        out.append({"box": (bx + (bw - hw) / 2, by, hw, hh), "kind": "head", "on": False,
+                    "why": "person, no face found (often facing away)"})
+    for box, why in texts:
+        out.append({"box": box, "kind": "text", "on": why != "other text", "why": why})
+    return out

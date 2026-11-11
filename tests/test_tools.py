@@ -120,3 +120,34 @@ def test_look_returns_finished_copies_only(sw, folder):
         assert not im.getexif() and not im.info.get("xmp")
     original = W.scene()
     assert not np.array_equal(np.asarray(Image.open(imgs[0]["image"]).resize((64, 48))), np.asarray(original.resize((64, 48))))
+
+
+# detection helpers (pure Python; Apple Vision itself only runs on macOS)
+def test_tiles_cover_the_photo_and_map_back():
+    tiles = detect.tiles_for((4536, 8064))
+    assert len(tiles) >= 4
+    for x in (0.01, 0.5, 0.99):                                          # every point lies in at least one tile
+        for y in (0.01, 0.5, 0.99):
+            assert any(t[0] <= x <= t[0] + t[2] and t[1] <= y <= t[1] + t[3] for t in tiles)
+    assert detect.tiles_for((1600, 1200)) == []
+    t = (0.5, 0.25, 0.5, 0.5)
+    assert detect.from_tile((0.5, 0.5, 0.1, 0.1), t) == (0.75, 0.5, 0.05, 0.05)
+
+
+def test_same_face_from_whole_photo_and_tiles_is_merged():
+    merged = detect.merge_faces([(0.40, 0.40, 0.10, 0.10), (0.405, 0.402, 0.095, 0.098), (0.80, 0.20, 0.03, 0.03)])
+    assert len(merged) == 2
+
+
+def test_people_without_a_face_are_suggested_switched_off(monkeypatch):
+    monkeypatch.setattr(detect, "available", lambda: True)
+    calls = []
+    def fake_vision(img, wd, faces_only):
+        calls.append(faces_only)
+        return ([], [] if faces_only else [(0.1, 0.2, 0.2, 0.6)], [] if faces_only else [((0.5, 0.5, 0.2, 0.05), "street name")])
+    monkeypatch.setattr(detect, "_vision", fake_vision)
+    found = detect.detect(Image.new("RGB", (4000, 6000)), Path("/tmp/sw_detect_test"))
+    head = [a for a in found if a["kind"] == "head"][0]
+    assert head["on"] is False and "no face" in head["why"]
+    assert [a for a in found if a["kind"] == "text"][0]["on"] is True
+    assert calls[0] is False and all(calls[1:]) and len(calls) > 1      # whole photo first, then face-only tiles

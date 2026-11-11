@@ -22,9 +22,10 @@ Hermes:  Made 5 copies in ~/Pictures/Singapore/Sharewise: 9 areas hidden, every 
 1. **Check** one folder you name. You get yes/no counts: location, location detail, time, device, unique IDs,
    owner name, captions, hidden thumbnails, editing history, depth maps. Videos (MOV, MP4, M4V, 3GP) are checked for
    location, dates and device.
-2. **Review** (macOS): Apple's Vision framework, on this computer, finds faces, people whose face is turned away (their
-   head area), and text that can locate someone: street names, house or unit numbers, licence plates. Other text
-   (slides, shop signs) is proposed switched off. A local review page shows each photo **before and after**; click an
+2. **Review** (macOS): Apple's Vision framework, on this computer, finds faces (on the whole photo and again on
+   overlapping high-resolution tiles, so small faces in a crowd are found too) and text that can locate someone:
+   street names, house or unit numbers, licence plates. People with no face found (often facing away) and other text
+   (slides, shop signs) are proposed switched off. A local review page shows each photo **before and after**; click an
    area to switch it off or on, drag to add your own, and copy the selection code back to Hermes.
 3. **Share**: copies go to a `Sharewise/` folder next to the photos. Every copy is re-read and verified. Video copies
    are not re-encoded: picture and sound samples stay byte-identical and the file keeps its size. Inside the copy,

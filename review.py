@@ -19,7 +19,7 @@ from PIL import Image
 from . import redact
 
 PREVIEW_EDGE = 1600
-KIND_LABEL = {"face": "Face", "head": "Person", "text": "Street / house / plate", "plate": "Plate", "manual": "Your area"}
+KIND_LABEL = {"face": "Face", "head": "Person, no face found", "text": "Street / house / plate", "plate": "Plate", "manual": "Your area"}
 
 
 def _data_uri(im: Image.Image) -> str:
