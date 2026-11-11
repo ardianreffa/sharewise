@@ -430,7 +430,9 @@ class Sharewise:
         if sub == "check":
             d = json.loads(self.check({"folder": rest}))
             if "error" in d: return "Sharewise: " + d["error"]
-            lines = [f"Sharewise checked exactly {d['scanned_exactly']}: {d['photos']} photos (check {d['check_id']})."]
+            vids = d.get("videos", 0)
+            lines = [f"Sharewise checked exactly {d['scanned_exactly']}: {d['photos']} photo{'s' if d['photos'] != 1 else ''}"
+                     + (f" and {vids} video{'s' if vids != 1 else ''}" if vids else "") + f" (check {d['check_id']})."]
             lines += [f"  {k}: {v}" for k, v in d["what_they_reveal"].items()] or ["  nothing sensitive found"]
             return "\n".join(lines + ["Nothing was changed."])
         if sub == "detect-test":

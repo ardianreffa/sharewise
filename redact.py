@@ -103,7 +103,7 @@ def _small(a: np.ndarray, size) -> np.ndarray:
 def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image:
     """Return a new RGB image with every region destroyed. `regions`: [{"box": (x,y,w,h), "kind": ...}].
     `_seed` exists only so tests can compare two runs exactly; normal use draws fresh randomness."""
-    out = np.asarray(img.convert("RGB"), dtype=np.float32).copy()
+    out = np.array(img.convert("RGB"), dtype=np.uint8)            # whole photo stays 8-bit; only windows go to float
     H, W = out.shape[:2]
     rng = np.random.default_rng(secrets.randbits(64) if _seed is None else _seed)   # grain never derived from the image
     for r in regions:
@@ -116,7 +116,7 @@ def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image
         m = int(max(bw, bh) * RING.get(kind, 0.6)) + 4 + feather * 2   # a ring of surroundings around the region
         below = int(bh * NECK) if (kind in OVAL and shp == "oval") else 0
         wx0, wy0, wx1, wy1 = max(0, x0 - m), max(0, y0 - m), min(W, x1 + m), min(H, y1 + m + below)
-        win = out[wy0:wy1, wx0:wx1].copy(); ww, wh = wx1 - wx0, wy1 - wy0
+        win = out[wy0:wy1, wx0:wx1].astype(np.float32); ww, wh = wx1 - wx0, wy1 - wy0
         shape = Image.new("L", (ww, wh), 0)
         ImageDraw.Draw(shape).polygon([(px - wx0, py - wy0) for px, py in _polygon(r, (W, H), pad)], fill=255)
         inside = np.asarray(shape, dtype=np.float32) / 255.0
@@ -132,7 +132,7 @@ def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image
             soft = max(1, feather // 3)                      # a thin anti-aliased edge, no colour spill
             outer = np.asarray(shape.filter(ImageFilter.GaussianBlur(soft)), dtype=np.float32) / 255.0
             alpha = np.maximum(inside, outer); alpha[inside > 0] = 1.0
-            out[wy0:wy1, wx0:wx1] = np.clip(big, 0, 255) * alpha[..., None] + win * (1 - alpha[..., None])
+            out[wy0:wy1, wx0:wx1] = np.clip(np.clip(big, 0, 255) * alpha[..., None] + win * (1 - alpha[..., None]) + 0.5, 0, 255).astype(np.uint8)
             continue
         # 1) forget the inside: zeroed (with a safety margin) before anything is computed
         guard = np.asarray(shape.filter(ImageFilter.MaxFilter(5)), dtype=np.float32) / 255.0
@@ -166,8 +166,8 @@ def redact(img: Image.Image, regions: Iterable[dict], _seed=None) -> Image.Image
         outer = np.asarray(grown.filter(ImageFilter.GaussianBlur(feather)), dtype=np.float32) / 255.0
         outer = outer * outer * (3 - 2 * outer)
         alpha = np.maximum(inside, outer); alpha[inside > 0] = 1.0
-        out[wy0:wy1, wx0:wx1] = np.clip(big, 0, 255) * alpha[..., None] + win * (1 - alpha[..., None])
-    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+        out[wy0:wy1, wx0:wx1] = np.clip(np.clip(big, 0, 255) * alpha[..., None] + win * (1 - alpha[..., None]) + 0.5, 0, 255).astype(np.uint8)
+    return Image.fromarray(out, "RGB")
 
 
 def shape_pixels(region, size, kind="manual", angle=0.0, shape=None):
